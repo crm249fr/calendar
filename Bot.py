@@ -8,7 +8,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-TOKEN = "8319493214:AAH7OER2ucuTTyvpDDjmppU-X3qUvwuRyoA"
+TOKEN = "8765454976:AAGolrqZ8bcQJTj8FnCN1ltagpM0TBbNGDk"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отвечает только на команду старт"""
@@ -22,11 +22,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Пользователь {user.first_name} (ID: {user.id}) запустил бота")
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Логирует ошибки"""
     logger.error(f"Ошибка: {context.error}")
 
 def main():
-    """Главная функция"""
     print("🚀 Запускаю бота...")
     print("📝 Бот будет реагировать только на команду /start")
     print("⚠️ Нажмите Ctrl+C для остановки")
