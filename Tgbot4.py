@@ -22,10 +22,7 @@ MONTHS_RU = ['Январь', 'Февраль', 'Март', 'Апрель', 'Ма
              'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
 
 def init_database():
-    """
-    Инициализация базы данных smartnotes
-    Создает таблицу users, если она не существует
-    """
+    # базы данных smartnotes
     try:
         conn = sqlite3.connect('smartnotes.db')
         cursor = conn.cursor()
@@ -45,10 +42,7 @@ def init_database():
         return None
 
 def get_or_create_user(username):
-    """
-    Получает ID пользователя из таблицы users или создает нового
-    Возвращает ID пользователя
-    """
+    # Получает ID пользователя из таблицы users или создает нового
     conn = None
     try:
         conn = sqlite3.connect('smartnotes.db')
@@ -82,16 +76,11 @@ def get_or_create_user(username):
             conn.close()
 
 def create_user_table(user_id):
-    """
-    Создает таблицу для пользователя с именем = user_id
-    Таблица имеет структуру как в таблице "1"
-    """
     conn = None
     try:
         conn = sqlite3.connect('smartnotes.db')
         cursor = conn.cursor()
         
-        # Создаем таблицу с именем = ID пользователя
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS "{user_id}" (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -115,15 +104,12 @@ def create_user_table(user_id):
             conn.close()
 
 def save_user_date(user_id, year, month, day):
-    """
-    Сохраняет выбранную дату в таблицу пользователя
-    """
+    #Сохраняет выбранную дату в таблицу пользователя
     conn = None
     try:
         conn = sqlite3.connect('smartnotes.db')
         cursor = conn.cursor()
         
-        # Вставляем дату в таблицу пользователя
         cursor.execute(f'''
             INSERT INTO "{user_id}" (year, month, day)
             VALUES (?, ?, ?)
@@ -141,20 +127,17 @@ def save_user_date(user_id, year, month, day):
             conn.close()
 
 def get_user_dates(user_id, limit=5):
-    """
-    Получает последние даты пользователя
-    """
+    #Получает последние даты пользователя
+
     conn = None
     try:
         conn = sqlite3.connect('smartnotes.db')
         cursor = conn.cursor()
         
-        # Проверяем, существует ли таблица пользователя
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (str(user_id),))
         if not cursor.fetchone():
             return []
         
-        # Получаем последние даты
         cursor.execute(f'''
             SELECT year, month, day FROM "{user_id}"
             ORDER BY id DESC
@@ -163,7 +146,6 @@ def get_user_dates(user_id, limit=5):
         
         dates = cursor.fetchall()
         
-        # Форматируем даты для вывода
         formatted_dates = [f"{day}.{month}.{year}" for year, month, day in dates]
         return formatted_dates
         
@@ -175,15 +157,12 @@ def get_user_dates(user_id, limit=5):
             conn.close()
 
 def get_user_dates_count(user_id):
-    """
-    Получает общее количество дат пользователя
-    """
+    #Получает общее количество дат пользователя
     conn = None
     try:
         conn = sqlite3.connect('smartnotes.db')
         cursor = conn.cursor()
         
-        # Проверяем, существует ли таблица пользователя
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (str(user_id),))
         if not cursor.fetchone():
             return 0
@@ -199,20 +178,17 @@ def get_user_dates_count(user_id):
         if conn:
             conn.close()
 def create_calendar(year: int, month: int):
-    """Создает клавиатуру календаря"""
+    #Создает клавиатуру календаря
     keyboard = []
-    
-    # Заголовок с месяцем и годом
+    м
     keyboard.append([InlineKeyboardButton(f"📅 {MONTHS_RU[month-1]} {year}", callback_data="ignore")])
     
-    # Дни недели
     week_days = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
     week_row = []
     for day in week_days:
         week_row.append(InlineKeyboardButton(day, callback_data="ignore"))
     keyboard.append(week_row)
     
-    # Дни месяца
     cal = calendar.monthcalendar(year, month)
     for week in cal:
         week_row = []
@@ -223,7 +199,6 @@ def create_calendar(year: int, month: int):
                 week_row.append(InlineKeyboardButton(str(day), callback_data=f"date_{year}_{month}_{day}"))
         keyboard.append(week_row)
     
-    # Навигация
     nav_row = []
     
     prev_year = year - 1 if month == 1 else year
@@ -238,14 +213,13 @@ def create_calendar(year: int, month: int):
     
     keyboard.append(nav_row)
     
-    # Кнопка закрытия
     keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="close")])
     
     return InlineKeyboardMarkup(keyboard)
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /start"""
+    #Обработчик команды /start
     try:
         user = update.effective_user
         username = user.username or user.first_name  # Используем first_name, если нет username
@@ -254,7 +228,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = get_or_create_user(username)
         
         if user_id:
-            # Сохраняем user_id в context.user_data для дальнейшего использования
             context.user_data['db_user_id'] = user_id
             logger.info(f"Пользователь {username} (ID в БД: {user_id}) запустил бота")
         
@@ -271,7 +244,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка в start: {e}")
 
 async def choose_date_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /choose_date"""
+    #Обработчик команды /choose_date
     try:
         now = datetime.now()
         calendar_markup = create_calendar(now.year, now.month)
@@ -284,7 +257,7 @@ async def choose_date_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"Ошибка в choose_date: {e}")
 
 async def my_dates_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /my_dates - показывает сохраненные даты пользователя"""
+    #Обработчик команды /my_dates - показывает сохраненные даты пользователя
     try:
         user = update.effective_user
         username = user.username or user.first_name
@@ -312,7 +285,7 @@ async def my_dates_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка в my_dates: {e}")
 
 async def hello_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /hello"""
+    #Обработчик команды /hello
     try:
         await update.message.reply_text("Привет! 🎉")
     except Exception as e:
@@ -320,7 +293,7 @@ async def hello_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик нажатий на кнопки"""
+    #Обработчик нажатий на кнопки
     try:
         query = update.callback_query
         await query.answer()
@@ -358,23 +331,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         
         elif data.startswith("date_"):
-            # Выбрана конкретная дата
             _, year, month, day = data.split("_")
             selected_date = f"{day}.{month}.{year}"
             
-            # Получаем информацию о пользователе
             user = update.effective_user
             username = user.username or user.first_name
             
-            # Получаем или создаем пользователя в БД
             user_id = get_or_create_user(username)
             
             if user_id:
-                # Сохраняем дату в БД
                 save_success = save_user_date(user_id, int(year), int(month), int(day))
                 
                 if save_success:
-                    # Получаем общее количество дат
                     total_count = get_user_dates_count(user_id)
                     
                     await query.edit_message_text(
@@ -382,7 +350,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                              f"Всего дат: {total_count}"
                     )
                     
-                    # Предлагаем выбрать еще дату
                     keyboard = [[InlineKeyboardButton("📅 Выбрать еще", callback_data='show_calendar')]]
                     reply_markup = InlineKeyboardMarkup(keyboard)
                     await context.bot.send_message(
@@ -400,7 +367,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
         
         elif data == "close":
-            # Закрыть календарь
             await query.edit_message_text(text="❌ Календарь закрыт")
     
     except Exception as e:
@@ -408,7 +374,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик обычных текстовых сообщений"""
+    #Обработчик обычных текстовых сообщений
     try:
         responses = ["Привет! 😊", "Здравствуй! 🌟", "Привет-привет! 🎈"]
         response = random.choice(responses)
@@ -433,33 +399,26 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     print("Запускаю бота...")
     
-    # Инициализируем базу данных
     init_database()
     print("✅ База данных инициализирована")
     
-    # Создаем приложение
     app = Application.builder().token(TOKEN).build()
     
-    # Регистрируем обработчики команд
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("hello", hello_command))
     app.add_handler(CommandHandler("choose_date", choose_date_command))
     app.add_handler(CommandHandler("my_dates", my_dates_command))
     
-    # Регистрируем обработчик callback-запросов (кнопки)
     app.add_handler(CallbackQueryHandler(button_callback))
     
-    # Регистрируем обработчик текстовых сообщений
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    # Регистрируем глобальный обработчик ошибок
     app.add_error_handler(error_handler)
     
     print("✅ Бот запущен! Доступные команды: /start, /hello, /choose_date, /my_dates")
     print("📊 Данные сохраняются в файл smartnotes.db")
     print("⚠️ Нажмите Ctrl+C для остановки.")
     
-    # Запускаем бота
     app.run_polling(
         allowed_updates=['message', 'callback_query'],
         drop_pending_updates=True,
