@@ -9,7 +9,7 @@ import json
 import requests
 
 from API import TOKEN, YANDEX_API_KEY, YANDEX_FOLDER_ID, MONTHS_RU, CHOOSING_GIFT, WAITING_PREFERENCES, GETTING_NEW_PREFERENCES
-from BazaD import (
+from Datadase import (
     init_database, get_or_create_user, save_user_date, update_gift_for_record,
     update_preferences_for_record, get_user_dates, get_user_dates_count,
     get_last_record_id, get_last_preferences
