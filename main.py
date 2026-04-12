@@ -9,7 +9,7 @@ import json
 import requests
 import re
  
-from API import TOKEN, YANDEX_API_KEY, YANDEX_FOLDER_ID, MONTHS_RU, CHOOSING_GIFT, WAITING_PREFERENCES, GETTING_NEW_PREFERENCES
+from API import TOKEN, YANDEX_API_KEY, YANDEX_FOLDER_ID, MONTHS_RU, API_BASE_URL
 from Database import (
     init_database, get_or_create_user, save_user_date, update_gift_for_record,
     update_preferences_for_record, get_user_dates, get_user_dates_count,
@@ -21,7 +21,28 @@ CHOOSING_GIFT_NUMBER = 5
  
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
- 
+
+# Функция для вызовов Flask API
+def call_api(endpoint, data, timeout=10):
+    """Вспомогательная функция для вызовов Flask API"""
+    try:
+        response = requests.post(f'{API_BASE_URL}/{endpoint}', json=data, timeout=timeout)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.ConnectionError:
+        logger.error(f"Не удается подключиться к Flask API на {API_BASE_URL}")
+        return None
+    except Exception as e:
+        logger.error(f"API error {endpoint}: {e}")
+        return None
+
+# Проверка доступности API
+def check_api_available():
+    try:
+        response = requests.get(f'{API_BASE_URL}/health', timeout=5)
+        return response.status_code == 200
+    except:
+        return False
  
 def create_calendar(year, month):
     keyboard = []
@@ -80,9 +101,14 @@ def get_gift_suggestions(preferences):
   
 async def start_command(update, context):
     user = update.effective_user
-    user_id = get_or_create_user(user.username or user.first_name)
-    if user_id:
-        context.user_data['db_user_id'] = user_id
+    # Проверяем доступность API
+    if not check_api_available():
+        await update.message.reply_text("⚠️ Сервер временно недоступен. Пожалуйста, попробуйте позже.")
+        return
+    
+    result = call_api('get_or_create_user', {'username': user.username or user.first_name})
+    if result and result.get('user_id'):
+        context.user_data['db_user_id'] = result['user_id']
     keyboard = [[InlineKeyboardButton("📅 Выбрать дату", callback_data='show_calendar')]]
     await update.message.reply_text(
         f"Привет, {user.first_name}! 👋\n\n"
@@ -100,11 +126,16 @@ async def choose_date_command(update, context):
  
 async def my_dates_command(update, context):
     user = update.effective_user
-    user_id = get_or_create_user(user.username or user.first_name)
-    if user_id:
-        dates = get_user_dates(user_id)
-        total = get_user_dates_count(user_id)
-        if dates:
+    if not check_api_available():
+        await update.message.reply_text("⚠️ Сервер временно недоступен. Пожалуйста, попробуйте позже.")
+        return
+    
+    result = call_api('get_or_create_user', {'username': user.username or user.first_name})
+    if result and result.get('user_id'):
+        dates_result = call_api('get_user_dates', {'user_id': result['user_id'], 'limit': 10})
+        if dates_result and dates_result.get('dates'):
+            dates = dates_result['dates']
+            total = dates_result['count']
             await update.message.reply_text(
                 f"📅 Ваши сохраненные даты:\n\n" +
                 "\n\n".join([f"• {d}" for d in dates]) +
@@ -112,6 +143,8 @@ async def my_dates_command(update, context):
             )
         else:
             await update.message.reply_text("📭 Нет дат. Используйте /choose_date")
+    else:
+        await update.message.reply_text("📭 Нет дат. Используйте /choose_date")
  
 async def hello_command(update, context):
     await update.message.reply_text("Привет! 🎉 Чем могу помочь?")
@@ -131,10 +164,11 @@ async def gift_choice_callback(update, context):
  
 async def receive_preferences(update, context):
     preferences = update.message.text
-    user_id = get_or_create_user(update.effective_user.username or update.effective_user.first_name)
+    result = call_api('get_or_create_user', {'username': update.effective_user.username or update.effective_user.first_name})
+    user_id = result.get('user_id') if result else None
     record_id = context.user_data.get('last_record_id')
     if user_id and record_id:
-        update_preferences_for_record(record_id, user_id, preferences)
+        call_api('update_preferences', {'record_id': record_id, 'user_id': user_id, 'preferences': preferences})
         msg = await update.message.reply_text("🔄 Генерирую варианты подарков...")
         suggestions = get_gift_suggestions(preferences)
         await msg.delete()
@@ -155,10 +189,11 @@ async def select_gift_callback(update, context):
     gift_number = int(query.data.split("_")[2])
     gifts = context.user_data.get('current_gifts', [])
     record_id = context.user_data.get('current_record_id')
-    user_id = get_or_create_user(update.effective_user.username or update.effective_user.first_name)
+    result = call_api('get_or_create_user', {'username': update.effective_user.username or update.effective_user.first_name})
+    user_id = result.get('user_id') if result else None
     selected = next((g['text'] for g in gifts if g['number'] == gift_number), None)
     if selected and record_id and user_id:
-        update_gift_for_record(record_id, user_id, f"🎁 {selected}")
+        call_api('update_gift', {'record_id': record_id, 'user_id': user_id, 'what_gift': f"🎁 {selected}"})
         await query.edit_message_text(f"✅ Выбран подарок:\n\n{selected}\n\n💾 Сохранён в /my_dates")
     return ConversationHandler.END
  
@@ -194,10 +229,11 @@ async def gift_action_callback(update, context):
  
 async def receive_new_preferences(update, context):
     new_prefs = update.message.text
-    user_id = get_or_create_user(update.effective_user.username or update.effective_user.first_name)
+    result = call_api('get_or_create_user', {'username': update.effective_user.username or update.effective_user.first_name})
+    user_id = result.get('user_id') if result else None
     record_id = context.user_data.get('changing_prefs_record')
     if user_id and record_id:
-        update_preferences_for_record(record_id, user_id, new_prefs)
+        call_api('update_preferences', {'record_id': record_id, 'user_id': user_id, 'preferences': new_prefs})
         msg = await update.message.reply_text("🔄 Генерирую варианты...")
         suggestions = get_gift_suggestions(new_prefs)
         await msg.delete()
@@ -219,13 +255,16 @@ async def reminder_callback(update, context):
         await query.edit_message_text("📝 Напишите текст напоминания:")
         return CHOOSING_REMINDER
     elif query.data == "no_reminder":
-        user_id = get_or_create_user(update.effective_user.username or update.effective_user.first_name)
+        result = call_api('get_or_create_user', {'username': update.effective_user.username or update.effective_user.first_name})
+        user_id = result.get('user_id') if result else None
         if user_id:
             y, m, d = context.user_data.get('selected_year'), context.user_data.get('selected_month'), context.user_data.get('selected_day')
-            record_id = save_user_date(user_id, y, m, d, holiday_reminder=None)
-            if record_id:
+            save_result = call_api('save_user_date', {'user_id': user_id, 'year': y, 'month': m, 'day': d, 'holiday_reminder': None})
+            if save_result and save_result.get('record_id'):
+                record_id = save_result['record_id']
                 context.user_data['last_record_id'] = record_id
-                total = get_user_dates_count(user_id)
+                count_result = call_api('get_user_dates', {'user_id': user_id})
+                total = count_result.get('count', 0) if count_result else 0
                 keyboard = [
                     [InlineKeyboardButton("🎁 Да, помоги подобрать подарок", callback_data="need_gift_help")],
                     [InlineKeyboardButton("❌ Нет, просто сохранить дату", callback_data="no_gift_help")]
@@ -241,13 +280,16 @@ async def receive_reminder(update, context):
     if not reminder_text:
         await update.message.reply_text("Напишите текст напоминания:")
         return CHOOSING_REMINDER
-    user_id = get_or_create_user(update.effective_user.username or update.effective_user.first_name)
+    result = call_api('get_or_create_user', {'username': update.effective_user.username or update.effective_user.first_name})
+    user_id = result.get('user_id') if result else None
     if user_id:
         y, m, d = context.user_data.get('selected_year'), context.user_data.get('selected_month'), context.user_data.get('selected_day')
-        record_id = save_user_date(user_id, y, m, d, holiday_reminder=reminder_text)
-        if record_id:
+        save_result = call_api('save_user_date', {'user_id': user_id, 'year': y, 'month': m, 'day': d, 'holiday_reminder': reminder_text})
+        if save_result and save_result.get('record_id'):
+            record_id = save_result['record_id']
             context.user_data['last_record_id'] = record_id
-            total = get_user_dates_count(user_id)
+            count_result = call_api('get_user_dates', {'user_id': user_id})
+            total = count_result.get('count', 0) if count_result else 0
             keyboard = [
                 [InlineKeyboardButton("🎁 Да, помоги подобрать подарок", callback_data="need_gift_help")],
                 [InlineKeyboardButton("❌ Нет, просто сохранить дату", callback_data="no_gift_help")]
@@ -296,10 +338,17 @@ async def error_handler(update, context):
  
 def main():
     print("=" * 50)
-    print("🤖 Запускаю бота...")
-    init_database()
-    print("✅ База данных инициализирована")
- 
+    print("🤖 Запускаю Telegram бота...")
+    
+    # Проверяем доступность Flask API
+    if not check_api_available():
+        print("⚠️ ВНИМАНИЕ: Flask API недоступен!")
+        print(f"⚠️ Убедитесь, что Flask сервер запущен на {API_BASE_URL}")
+        print("⚠️ Запустите flask_api.py в отдельном терминале")
+        response = input("Продолжить запуск бота? (y/n): ")
+        if response.lower() != 'y':
+            return
+    
     app = Application.builder().token(TOKEN).build()
  
     app.add_handler(CommandHandler("start", start_command))
@@ -332,7 +381,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_error_handler(error_handler)
  
-    print("✅ Бот запущен!")
+    print("✅ Telegram бот запущен!")
     app.run_polling(allowed_updates=['message', 'callback_query'], drop_pending_updates=True, timeout=30)
  
 if __name__ == "__main__":
