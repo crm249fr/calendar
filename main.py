@@ -136,11 +136,30 @@ async def my_dates_command(update, context):
         if dates_result and dates_result.get('dates'):
             dates = dates_result['dates']
             total = dates_result['count']
-            await update.message.reply_text(
-                f"📅 Ваши сохраненные даты:\n\n" +
-                "\n\n".join([f"• {d}" for d in dates]) +
-                f"\n\n📊 Всего дат: {total}"
-            )
+            
+            if dates:
+                # Разбиваем на части, если сообщение слишком длинное (ограничение Telegram ~4096 символов)
+                message_parts = []
+                current_part = "📅 Ваши сохраненные даты:\n\n"
+                
+                for date_str in dates:
+                    candidate = current_part + f"• {date_str}\n"
+                    if len(candidate) > 4000:  # Оставляем запас для итоговой строки
+                        message_parts.append(current_part)
+                        current_part = f"• {date_str}\n"
+                    else:
+                        current_part = candidate
+                
+                if current_part:
+                    current_part += f"\n📊 Всего дат: {total}"
+                    message_parts.append(current_part)
+                else:
+                    message_parts[-1] += f"\n📊 Всего дат: {total}"
+
+                for part in message_parts:
+                    await update.message.reply_text(part)
+            else:
+                await update.message.reply_text("📭 Нет дат. Используйте /choose_date")
         else:
             await update.message.reply_text("📭 Нет дат. Используйте /choose_date")
     else:
