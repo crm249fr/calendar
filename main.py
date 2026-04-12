@@ -132,7 +132,7 @@ async def my_dates_command(update, context):
     
     result = call_api('get_or_create_user', {'username': user.username or user.first_name})
     if result and result.get('user_id'):
-        dates_result = call_api('get_user_dates', {'user_id': result['user_id'], 'limit': 10})
+        dates_result = call_api('get_user_dates', {'user_id': result['user_id']})
         if dates_result and dates_result.get('dates'):
             dates = dates_result['dates']
             total = dates_result['count']
