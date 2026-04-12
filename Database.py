@@ -56,7 +56,7 @@ def create_user_table(user_id):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute(f'''
-            CREATE TABLE IF NOT EXISTS "{user_id}" (
+            CREATE TABLE IF NOT EXISTS "user_{user_id}" (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 year INTEGER NOT NULL,
                 month INTEGER NOT NULL,
@@ -84,7 +84,7 @@ def save_user_date(user_id, year, month, day, event=None, whom=None, what_gift=N
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute(f'''
-            INSERT INTO "{user_id}" (year, month, day, event, whom, what_gift, holiday_reminder)
+            INSERT INTO "user_{user_id}" (year, month, day, event, whom, what_gift, holiday_reminder)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         ''', (year, month, day, event, whom, what_gift, holiday_reminder))
         conn.commit()
@@ -105,7 +105,7 @@ def update_gift_for_record(record_id, user_id, what_gift):
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute(f'UPDATE "{user_id}" SET what_gift = ? WHERE id = ?', (what_gift, record_id))
+        cursor.execute(f'UPDATE "user_{user_id}" SET what_gift = ? WHERE id = ?', (what_gift, record_id))
         conn.commit()
         logger.info(f"Подарок сохранен для записи {record_id} пользователя {user_id}")
         return True
@@ -122,7 +122,7 @@ def update_preferences_for_record(record_id, user_id, preferences):
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute(f'UPDATE "{user_id}" SET preferences = ? WHERE id = ?', (preferences, record_id))
+        cursor.execute(f'UPDATE "user_{user_id}" SET preferences = ? WHERE id = ?', (preferences, record_id))
         conn.commit()
         logger.info(f"Предпочтения сохранены для записи {record_id}")
         return True
@@ -139,11 +139,11 @@ def get_user_dates(user_id, limit=5):
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (str(user_id),))
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (f"user_{user_id}",))
         if not cursor.fetchone():
             return []
         cursor.execute(f'''
-            SELECT year, month, day, what_gift, holiday_reminder FROM "{user_id}"
+            SELECT year, month, day, what_gift, holiday_reminder FROM "user_{user_id}"
             ORDER BY id DESC LIMIT ?
         ''', (limit,))
         formatted = []
@@ -168,10 +168,10 @@ def get_user_dates_count(user_id):
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (str(user_id),))
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (f"user_{user_id}",))
         if not cursor.fetchone():
             return 0
-        cursor.execute(f'SELECT COUNT(*) FROM "{user_id}"')
+        cursor.execute(f'SELECT COUNT(*) FROM "user_{user_id}"')
         return cursor.fetchone()[0]
     except Exception as e:
         logger.error(f"Ошибка при подсчете дат: {e}")
@@ -186,7 +186,7 @@ def get_last_record_id(user_id):
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute(f'SELECT id FROM "{user_id}" ORDER BY id DESC LIMIT 1')
+        cursor.execute(f'SELECT id FROM "user_{user_id}" ORDER BY id DESC LIMIT 1')
         result = cursor.fetchone()
         return result[0] if result else None
     except Exception as e:
@@ -202,7 +202,7 @@ def get_last_preferences(user_id):
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute(f'SELECT preferences FROM "{user_id}" ORDER BY id DESC LIMIT 1')
+        cursor.execute(f'SELECT preferences FROM "user_{user_id}" ORDER BY id DESC LIMIT 1')
         result = cursor.fetchone()
         return result[0] if result and result[0] else None
     except Exception as e:
