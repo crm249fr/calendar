@@ -152,7 +152,7 @@ def get_user_dates(user_id, limit=5):
             if holiday_reminder:
                 date_str += f" (Напоминает о празднике: {holiday_reminder})"
             if what_gift:
-                date_str += f" (Подарок: {what_gift[:50]}...)"
+                date_str += f" (Подарок: {what_gift}...)"
             formatted.append(date_str)
         return formatted
     except Exception as e:
