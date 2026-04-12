@@ -7,3 +7,7 @@ MONTHS_RU = ['Январь', 'Февраль', 'Март', 'Апрель', 'Ма
              'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
 
 CHOOSING_GIFT, WAITING_PREFERENCES, GETTING_NEW_PREFERENCES = range(3)
+
+# API Server Configuration
+API_HOST = '127.0.0.1'
+API_PORT = 5000
