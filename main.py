@@ -8,23 +8,21 @@ import asyncio
 import json
 import requests
 import re
- 
-from API import TOKEN, YANDEX_API_KEY, YANDEX_FOLDER_ID, MONTHS_RU, API_BASE_URL
+
+from API import TOKEN, YANDEX_API_KEY, YANDEX_FOLDER_ID, MONTHS_RU, API_BASE_URL, CHOOSING_GIFT, WAITING_PREFERENCES, GETTING_NEW_PREFERENCES
 from Database import (
     init_database, get_or_create_user, save_user_date, update_gift_for_record,
     update_preferences_for_record, get_user_dates, get_user_dates_count,
     get_last_record_id, get_last_preferences
 )
- 
+
 CHOOSING_REMINDER = 4
 CHOOSING_GIFT_NUMBER = 5
- 
+
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Функция для вызовов Flask API
 def call_api(endpoint, data, timeout=10):
-    """Вспомогательная функция для вызовов Flask API"""
     try:
         response = requests.post(f'{API_BASE_URL}/{endpoint}', json=data, timeout=timeout)
         response.raise_for_status()
@@ -36,14 +34,13 @@ def call_api(endpoint, data, timeout=10):
         logger.error(f"API error {endpoint}: {e}")
         return None
 
-# Проверка доступности API
 def check_api_available():
     try:
         response = requests.get(f'{API_BASE_URL}/health', timeout=5)
         return response.status_code == 200
     except:
         return False
- 
+
 def create_calendar(year, month):
     keyboard = []
     keyboard.append([InlineKeyboardButton(f"📅 {MONTHS_RU[month-1]} {year}", callback_data="ignore")])
@@ -68,8 +65,8 @@ def create_calendar(year, month):
     ])
     keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="close")])
     return InlineKeyboardMarkup(keyboard)
- 
- 
+
+
 def parse_gift_suggestions(text):
     gifts = []
     for line in text.split('\n'):
@@ -77,8 +74,8 @@ def parse_gift_suggestions(text):
         if match:
             gifts.append({'number': int(match.group(1)), 'text': match.group(2)})
     return gifts
- 
- 
+
+
 def get_gift_suggestions(preferences):
     try:
         url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
@@ -98,14 +95,12 @@ def get_gift_suggestions(preferences):
     except Exception as e:
         logger.error(f"Ошибка Yandex AI: {e}")
         return "Произошла ошибка. Попробуйте позже."
-  
+
 async def start_command(update, context):
     user = update.effective_user
-    # Проверяем доступность API
     if not check_api_available():
         await update.message.reply_text("⚠️ Сервер временно недоступен. Пожалуйста, попробуйте позже.")
         return
-    
     result = call_api('get_or_create_user', {'username': user.username or user.first_name})
     if result and result.get('user_id'):
         context.user_data['db_user_id'] = result['user_id']
@@ -115,21 +110,22 @@ async def start_command(update, context):
         "Я бот для выбора дат и подбора подарков\n\n"
         "📌 Команды:\n"
         "/choose_date - выбрать дату в календаре\n"
-        "/my_dates - посмотреть сохраненные даты\n"
+        "/my_dates - посмотреть сохранённые даты\n"
+        "/delete_date - удалить одну дату\n"
+        "/delete_all_dates - удалить все даты\n"
         "/hello - поздороваться",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
- 
+
 async def choose_date_command(update, context):
     now = datetime.now()
     await update.message.reply_text("📆 Выберите дату:", reply_markup=create_calendar(now.year, now.month))
- 
+
 async def my_dates_command(update, context):
     user = update.effective_user
     if not check_api_available():
         await update.message.reply_text("⚠️ Сервер временно недоступен. Пожалуйста, попробуйте позже.")
         return
-    
     result = call_api('get_or_create_user', {'username': user.username or user.first_name})
     if result and result.get('user_id'):
         dates_result = call_api('get_user_dates', {'user_id': result['user_id'], 'limit': 10})
@@ -145,10 +141,10 @@ async def my_dates_command(update, context):
             await update.message.reply_text("📭 Нет дат. Используйте /choose_date")
     else:
         await update.message.reply_text("📭 Нет дат. Используйте /choose_date")
- 
+
 async def hello_command(update, context):
     await update.message.reply_text("Привет! 🎉 Чем могу помочь?")
- 
+
 async def gift_choice_callback(update, context):
     query = update.callback_query
     await query.answer()
@@ -161,7 +157,7 @@ async def gift_choice_callback(update, context):
     elif query.data == "no_gift_help":
         await query.edit_message_text("✅ Дата сохранена без подарка.")
         return ConversationHandler.END
- 
+
 async def receive_preferences(update, context):
     preferences = update.message.text
     result = call_api('get_or_create_user', {'username': update.effective_user.username or update.effective_user.first_name})
@@ -182,7 +178,7 @@ async def receive_preferences(update, context):
         ]
         await update.message.reply_text(f"🎁 Варианты подарков:\n\n{suggestions}\n\nВыберите:", reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
- 
+
 async def select_gift_callback(update, context):
     query = update.callback_query
     await query.answer()
@@ -196,7 +192,7 @@ async def select_gift_callback(update, context):
         call_api('update_gift', {'record_id': record_id, 'user_id': user_id, 'what_gift': f"🎁 {selected}"})
         await query.edit_message_text(f"✅ Выбран подарок:\n\n{selected}\n\n💾 Сохранён в /my_dates")
     return ConversationHandler.END
- 
+
 async def gift_action_callback(update, context):
     query = update.callback_query
     await query.answer()
@@ -226,7 +222,7 @@ async def gift_action_callback(update, context):
         await query.edit_message_text("✅ Дата сохранена без подарка.")
         return ConversationHandler.END
     return ConversationHandler.END
- 
+
 async def receive_new_preferences(update, context):
     new_prefs = update.message.text
     result = call_api('get_or_create_user', {'username': update.effective_user.username or update.effective_user.first_name})
@@ -247,7 +243,7 @@ async def receive_new_preferences(update, context):
         ]
         await update.message.reply_text(f"🎁 Новые варианты:\n\n{suggestions}\n\nВыберите:", reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
- 
+
 async def reminder_callback(update, context):
     query = update.callback_query
     await query.answer()
@@ -274,7 +270,7 @@ async def reminder_callback(update, context):
                     reply_markup=InlineKeyboardMarkup(keyboard)
                 )
     return ConversationHandler.END
- 
+
 async def receive_reminder(update, context):
     reminder_text = update.message.text.strip()
     if not reminder_text:
@@ -299,7 +295,7 @@ async def receive_reminder(update, context):
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
     return ConversationHandler.END
- 
+
 async def button_callback(update, context):
     query = update.callback_query
     await query.answer()
@@ -325,38 +321,121 @@ async def button_callback(update, context):
         )
     elif data == "close":
         await query.edit_message_text("❌ Календарь закрыт")
- 
+
 async def handle_message(update, context):
     keyboard = [[InlineKeyboardButton("📅 Выбрать дату", callback_data='show_calendar')]]
     await update.message.reply_text(
         random.choice(["Привет! 😊", "Здравствуй! 🌟", "Привет-привет! 🎈"]),
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
- 
+
+async def delete_date_command(update, context):
+    user = update.effective_user
+    if not check_api_available():
+        await update.message.reply_text("⚠️ Сервер временно недоступен. Попробуйте позже.")
+        return
+    result = call_api('get_or_create_user', {'username': user.username or user.first_name})
+    if not result or not result.get('user_id'):
+        await update.message.reply_text("❌ Не удалось получить данные пользователя.")
+        return
+    user_id = result['user_id']
+    dates_result = call_api('get_user_dates_with_ids', {'user_id': user_id})
+    if not dates_result or not dates_result.get('dates'):
+        await update.message.reply_text("📭 У вас нет сохранённых дат.")
+        return
+    dates = dates_result['dates']
+    keyboard = [
+        [InlineKeyboardButton(f"🗑 {d['label']}", callback_data=f"confirm_delete_date_{d['id']}")]
+        for d in dates
+    ]
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel_delete")])
+    await update.message.reply_text(
+        "🗑 Выберите дату для удаления:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def delete_all_dates_command(update, context):
+    user = update.effective_user
+    if not check_api_available():
+        await update.message.reply_text("⚠️ Сервер временно недоступен. Попробуйте позже.")
+        return
+    result = call_api('get_or_create_user', {'username': user.username or user.first_name})
+    if not result or not result.get('user_id'):
+        await update.message.reply_text("❌ Не удалось получить данные пользователя.")
+        return
+    user_id = result['user_id']
+    count_result = call_api('get_user_dates', {'user_id': user_id})
+    total = count_result.get('count', 0) if count_result else 0
+    if total == 0:
+        await update.message.reply_text("📭 У вас нет сохранённых дат.")
+        return
+    keyboard = [
+        [InlineKeyboardButton("✅ Да, удалить все", callback_data="confirm_delete_all")],
+        [InlineKeyboardButton("❌ Отмена", callback_data="cancel_delete")]
+    ]
+    await update.message.reply_text(
+        f"⚠️ Вы уверены, что хотите удалить все {total} дат(ы)?\n\nЭто действие нельзя отменить.",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def delete_callbacks(update, context):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    user = update.effective_user
+
+    if data == "cancel_delete":
+        await query.edit_message_text("❌ Удаление отменено.")
+        return
+
+    result = call_api('get_or_create_user', {'username': user.username or user.first_name})
+    if not result or not result.get('user_id'):
+        await query.edit_message_text("❌ Не удалось получить данные пользователя.")
+        return
+    user_id = result['user_id']
+
+    if data.startswith("confirm_delete_date_"):
+        record_id = int(data.split("confirm_delete_date_")[1])
+        del_result = call_api('delete_date', {'user_id': user_id, 'record_id': record_id})
+        if del_result and del_result.get('success'):
+            await query.edit_message_text("✅ Дата успешно удалена.")
+        else:
+            await query.edit_message_text("❌ Не удалось удалить дату. Попробуйте ещё раз.")
+
+    elif data == "confirm_delete_all":
+        del_result = call_api('delete_all_dates', {'user_id': user_id})
+        if del_result is not None:
+            deleted = del_result.get('deleted', 0)
+            await query.edit_message_text(f"✅ Удалено {deleted} дат(ы).")
+        else:
+            await query.edit_message_text("❌ Не удалось удалить даты. Попробуйте ещё раз.")
+
+
 async def error_handler(update, context):
     logger.error(f"Ошибка: {context.error}")
- 
+
 def main():
     print("=" * 50)
     print("🤖 Запускаю Telegram бота...")
-    
-    # Проверяем доступность Flask API
+
     if not check_api_available():
         print("⚠️ ВНИМАНИЕ: Flask API недоступен!")
         print(f"⚠️ Убедитесь, что Flask сервер запущен на {API_BASE_URL}")
         print("⚠️ Запустите flask_api.py в отдельном терминале")
-        response = input("Продолжить запуск бота? (y/n): ")
-        if response.lower() != 'y':
-            return
-    
+
     app = Application.builder().token(TOKEN).build()
- 
+
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("hello", hello_command))
     app.add_handler(CommandHandler("choose_date", choose_date_command))
     app.add_handler(CommandHandler("my_dates", my_dates_command))
+    app.add_handler(CommandHandler("delete_date", delete_date_command))
+    app.add_handler(CommandHandler("delete_all_dates", delete_all_dates_command))
     app.add_handler(CallbackQueryHandler(select_gift_callback, pattern="^select_gift_"))
- 
+    app.add_handler(CallbackQueryHandler(delete_callbacks, pattern="^(confirm_delete_date_|confirm_delete_all|cancel_delete)"))
+
     gift_conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(gift_choice_callback, pattern="^(need_gift_help|no_gift_help)$")],
         states={WAITING_PREFERENCES: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_preferences)]},
@@ -372,17 +451,17 @@ def main():
         states={WAITING_PREFERENCES: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_new_preferences)]},
         fallbacks=[CommandHandler("cancel", lambda u,c: u.message.reply_text("Отменено"))],
     )
- 
-    app.add_handler(CallbackQueryHandler(button_callback, pattern="^(?!need_gift_help|no_gift_help|add_reminder|no_reminder|find_more_|change_prefs_|select_gift_|skip_gift).*"))
+
+    app.add_handler(CallbackQueryHandler(button_callback, pattern="^(?!need_gift_help|no_gift_help|add_reminder|no_reminder|find_more_|change_prefs_|select_gift_|skip_gift|confirm_delete_date_|confirm_delete_all|cancel_delete).*"))
     app.add_handler(CallbackQueryHandler(gift_action_callback, pattern="^(find_more_|skip_gift)"))
     app.add_handler(reminder_conv_handler)
     app.add_handler(gift_conv_handler)
     app.add_handler(change_prefs_handler)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_error_handler(error_handler)
- 
+
     print("✅ Telegram бот запущен!")
     app.run_polling(allowed_updates=['message', 'callback_query'], drop_pending_updates=True, timeout=30)
- 
+
 if __name__ == "__main__":
     main()
