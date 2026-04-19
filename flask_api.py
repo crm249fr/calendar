@@ -4,7 +4,8 @@ from Database import (
     init_database, get_or_create_user, save_user_date, 
     update_gift_for_record, update_preferences_for_record,
     get_user_dates, get_user_dates_count, get_last_record_id,
-    get_last_preferences
+    get_last_preferences, get_user_dates_with_ids,
+    delete_user_date, delete_all_user_dates
 )
 import logging
 
@@ -12,9 +13,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app)  # Разрешаем кросс-доменные запросы
+CORS(app)
 
-# Инициализация БД при старте
 init_database()
 
 @app.route('/api/get_or_create_user', methods=['POST'])
@@ -110,6 +110,45 @@ def api_get_last_preferences():
         return jsonify({'preferences': preferences})
     except Exception as e:
         logger.error(f"Error in get_last_preferences: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/get_user_dates_with_ids', methods=['POST'])
+def api_get_user_dates_with_ids():
+    try:
+        data = request.json
+        user_id = data.get('user_id')
+        limit = data.get('limit', 50)
+        if not user_id:
+            return jsonify({'error': 'user_id required'}), 400
+        dates = get_user_dates_with_ids(user_id, limit)
+        return jsonify({'dates': dates})
+    except Exception as e:
+        logger.error(f"Error in get_user_dates_with_ids: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/delete_date', methods=['POST'])
+def api_delete_date():
+    try:
+        data = request.json
+        if not all(k in data for k in ['user_id', 'record_id']):
+            return jsonify({'error': 'Missing required fields'}), 400
+        success = delete_user_date(data['user_id'], data['record_id'])
+        return jsonify({'success': success})
+    except Exception as e:
+        logger.error(f"Error in delete_date: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/delete_all_dates', methods=['POST'])
+def api_delete_all_dates():
+    try:
+        data = request.json
+        user_id = data.get('user_id')
+        if not user_id:
+            return jsonify({'error': 'user_id required'}), 400
+        deleted = delete_all_user_dates(user_id)
+        return jsonify({'deleted': deleted})
+    except Exception as e:
+        logger.error(f"Error in delete_all_dates: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/health', methods=['GET'])
