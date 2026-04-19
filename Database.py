@@ -134,6 +134,73 @@ def update_preferences_for_record(record_id, user_id, preferences):
             conn.close()
 
 
+def get_user_dates_with_ids(user_id, limit=50):
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (f"user_{user_id}",))
+        if not cursor.fetchone():
+            return []
+        cursor.execute(f'''
+            SELECT id, year, month, day, what_gift, holiday_reminder FROM "user_{user_id}"
+            ORDER BY id DESC LIMIT ?
+        ''', (limit,))
+        result = []
+        for record_id, year, month, day, what_gift, holiday_reminder in cursor.fetchall():
+            date_str = f"{day}.{month}.{year}"
+            if holiday_reminder:
+                date_str += f" ({holiday_reminder})"
+            if what_gift:
+                date_str += f" 🎁"
+            result.append({'id': record_id, 'label': date_str})
+        return result
+    except Exception as e:
+        logger.error(f"Ошибка при получении дат с ID: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+
+def delete_user_date(user_id, record_id):
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(f'DELETE FROM "user_{user_id}" WHERE id = ?', (record_id,))
+        conn.commit()
+        logger.info(f"Запись {record_id} удалена для пользователя {user_id}")
+        return cursor.rowcount > 0
+    except Exception as e:
+        logger.error(f"Ошибка при удалении записи: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+
+def delete_all_user_dates(user_id):
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (f"user_{user_id}",))
+        if not cursor.fetchone():
+            return 0
+        cursor.execute(f'DELETE FROM "user_{user_id}"')
+        conn.commit()
+        deleted = cursor.rowcount
+        logger.info(f"Удалено {deleted} записей для пользователя {user_id}")
+        return deleted
+    except Exception as e:
+        logger.error(f"Ошибка при удалении всех записей: {e}")
+        return 0
+    finally:
+        if conn:
+            conn.close()
+
+
 def get_user_dates(user_id, limit=5):
     conn = None
     try:
