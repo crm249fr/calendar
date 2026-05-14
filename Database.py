@@ -14,9 +14,26 @@ def init_database():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL
+                username TEXT UNIQUE NOT NULL,
+                chat_id INTEGER
             )
         ''')
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN chat_id INTEGER")
+        except sqlite3.OperationalError:
+            pass
+
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'user_%'")
+        for (table_name,) in cursor.fetchall():
+            try:
+                cursor.execute(f'ALTER TABLE "{table_name}" ADD COLUMN notified INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute(f'ALTER TABLE "{table_name}" ADD COLUMN time TEXT')
+            except sqlite3.OperationalError:
+                pass
+
         conn.commit()
         logger.info("База данных успешно инициализирована")
         return conn
@@ -25,7 +42,7 @@ def init_database():
         return None
 
 
-def get_or_create_user(username):
+def get_or_create_user(username, chat_id=None):
     conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -34,9 +51,12 @@ def get_or_create_user(username):
         result = cursor.fetchone()
         if result:
             user_id = result[0]
+            if chat_id is not None:
+                cursor.execute("UPDATE users SET chat_id = ? WHERE id = ?", (chat_id, user_id))
+                conn.commit()
             logger.info(f"Найден существующий пользователь: {username} с ID {user_id}")
         else:
-            cursor.execute("INSERT INTO users (username) VALUES (?)", (username,))
+            cursor.execute("INSERT INTO users (username, chat_id) VALUES (?, ?)", (username, chat_id))
             user_id = cursor.lastrowid
             conn.commit()
             logger.info(f"Создан новый пользователь: {username} с ID {user_id}")
@@ -44,6 +64,22 @@ def get_or_create_user(username):
         return user_id
     except Exception as e:
         logger.error(f"Ошибка при получении/создании пользователя: {e}")
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_user_chat_id(user_id):
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT chat_id FROM users WHERE id = ?", (user_id,))
+        result = cursor.fetchone()
+        return result[0] if result else None
+    except Exception as e:
+        logger.error(f"Ошибка при получении chat_id: {e}")
         return None
     finally:
         if conn:
@@ -66,7 +102,8 @@ def create_user_table(user_id):
                 whom TEXT,
                 what_gift TEXT,
                 preferences TEXT,
-                holiday_reminder TEXT
+                holiday_reminder TEXT,
+                notified INTEGER DEFAULT 0
             )
         ''')
         conn.commit()
@@ -78,19 +115,19 @@ def create_user_table(user_id):
             conn.close()
 
 
-def save_user_date(user_id, year, month, day, event=None, whom=None, what_gift=None, holiday_reminder=None):
+def save_user_date(user_id, year, month, day, event=None, whom=None, what_gift=None, holiday_reminder=None, time=None):
     conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute(f'''
-            INSERT INTO "user_{user_id}" (year, month, day, event, whom, what_gift, holiday_reminder)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (year, month, day, event, whom, what_gift, holiday_reminder))
+            INSERT INTO "user_{user_id}" (year, month, day, time, event, whom, what_gift, holiday_reminder, notified)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+        ''', (year, month, day, time, event, whom, what_gift, holiday_reminder))
         conn.commit()
         cursor.execute("SELECT last_insert_rowid()")
         record_id = cursor.fetchone()[0]
-        logger.info(f"Дата {day}.{month}.{year} сохранена для пользователя {user_id}")
+        logger.info(f"Дата {day}.{month}.{year} {time or ''} сохранена для пользователя {user_id}")
         return record_id
     except Exception as e:
         logger.error(f"Ошибка при сохранении даты: {e}")
@@ -143,12 +180,14 @@ def get_user_dates_with_ids(user_id, limit=50):
         if not cursor.fetchone():
             return []
         cursor.execute(f'''
-            SELECT id, year, month, day, what_gift, holiday_reminder FROM "user_{user_id}"
+            SELECT id, year, month, day, time, what_gift, holiday_reminder FROM "user_{user_id}"
             ORDER BY id DESC LIMIT ?
         ''', (limit,))
         result = []
-        for record_id, year, month, day, what_gift, holiday_reminder in cursor.fetchall():
+        for record_id, year, month, day, time_val, what_gift, holiday_reminder in cursor.fetchall():
             date_str = f"{day}.{month}.{year}"
+            if time_val:
+                date_str += f" {time_val}"
             if holiday_reminder:
                 date_str += f" ({holiday_reminder})"
             if what_gift:
@@ -210,12 +249,14 @@ def get_user_dates(user_id, limit=5):
         if not cursor.fetchone():
             return []
         cursor.execute(f'''
-            SELECT year, month, day, what_gift, holiday_reminder FROM "user_{user_id}"
+            SELECT year, month, day, time, what_gift, holiday_reminder FROM "user_{user_id}"
             ORDER BY id DESC LIMIT ?
         ''', (limit,))
         formatted = []
-        for year, month, day, what_gift, holiday_reminder in cursor.fetchall():
+        for year, month, day, time_val, what_gift, holiday_reminder in cursor.fetchall():
             date_str = f"{day}.{month}.{year}"
+            if time_val:
+                date_str += f" в {time_val}"
             if holiday_reminder:
                 date_str += f" (Напоминает о празднике: {holiday_reminder})"
             if what_gift:
@@ -275,6 +316,59 @@ def get_last_preferences(user_id):
     except Exception as e:
         logger.error(f"Ошибка при получении предпочтений: {e}")
         return None
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_pending_reminders():
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, chat_id FROM users WHERE chat_id IS NOT NULL")
+        users_info = cursor.fetchall()
+        pending = []
+        for user_id, chat_id in users_info:
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (f"user_{user_id}",))
+            if not cursor.fetchone():
+                continue
+            cursor.execute(f'''
+                SELECT id, year, month, day, time, holiday_reminder
+                FROM "user_{user_id}"
+                WHERE notified = 0 AND time IS NOT NULL AND holiday_reminder IS NOT NULL
+            ''')
+            for record_id, year, month, day, time_val, reminder in cursor.fetchall():
+                pending.append({
+                    'user_id': user_id,
+                    'chat_id': chat_id,
+                    'record_id': record_id,
+                    'year': year,
+                    'month': month,
+                    'day': day,
+                    'time': time_val,
+                    'reminder': reminder,
+                })
+        return pending
+    except Exception as e:
+        logger.error(f"Ошибка при получении ожидающих напоминаний: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+
+def mark_reminder_notified(user_id, record_id):
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(f'UPDATE "user_{user_id}" SET notified = 1 WHERE id = ?', (record_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при отметке напоминания: {e}")
+        return False
     finally:
         if conn:
             conn.close()
