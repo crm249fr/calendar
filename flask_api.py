@@ -5,7 +5,8 @@ from Database import (
     update_gift_for_record, update_preferences_for_record,
     get_user_dates, get_user_dates_count, get_last_record_id,
     get_last_preferences, get_user_dates_with_ids,
-    delete_user_date, delete_all_user_dates
+    delete_user_date, delete_all_user_dates,
+    get_pending_reminders, mark_reminder_notified, get_user_chat_id
 )
 import logging
 
@@ -22,9 +23,10 @@ def api_get_or_create_user():
     try:
         data = request.json
         username = data.get('username')
+        chat_id = data.get('chat_id')
         if not username:
             return jsonify({'error': 'username required'}), 400
-        user_id = get_or_create_user(username)
+        user_id = get_or_create_user(username, chat_id)
         return jsonify({'user_id': user_id})
     except Exception as e:
         logger.error(f"Error in get_or_create_user: {e}")
@@ -40,7 +42,8 @@ def api_save_user_date():
         record_id = save_user_date(
             data['user_id'], data['year'], data['month'], data['day'],
             data.get('event'), data.get('whom'), 
-            data.get('what_gift'), data.get('holiday_reminder')
+            data.get('what_gift'), data.get('holiday_reminder'),
+            time=data.get('time')
         )
         return jsonify({'record_id': record_id})
     except Exception as e:
@@ -149,6 +152,39 @@ def api_delete_all_dates():
         return jsonify({'deleted': deleted})
     except Exception as e:
         logger.error(f"Error in delete_all_dates: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/get_pending_reminders', methods=['GET'])
+def api_get_pending_reminders():
+    try:
+        return jsonify({'reminders': get_pending_reminders()})
+    except Exception as e:
+        logger.error(f"Error in get_pending_reminders: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/mark_reminder_notified', methods=['POST'])
+def api_mark_reminder_notified():
+    try:
+        data = request.json
+        if not all(k in data for k in ['user_id', 'record_id']):
+            return jsonify({'error': 'Missing required fields'}), 400
+        success = mark_reminder_notified(data['user_id'], data['record_id'])
+        return jsonify({'success': success})
+    except Exception as e:
+        logger.error(f"Error in mark_reminder_notified: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/get_user_chat_id', methods=['POST'])
+def api_get_user_chat_id():
+    try:
+        data = request.json
+        user_id = data.get('user_id')
+        if not user_id:
+            return jsonify({'error': 'user_id required'}), 400
+        chat_id = get_user_chat_id(user_id)
+        return jsonify({'chat_id': chat_id})
+    except Exception as e:
+        logger.error(f"Error in get_user_chat_id: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/health', methods=['GET'])
