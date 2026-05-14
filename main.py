@@ -1,8 +1,11 @@
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, ConversationHandler
-from datetime import datetime
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, ConversationHandler, Defaults
+from datetime import datetime, date
+from zoneinfo import ZoneInfo
 import calendar
+
+TZ = ZoneInfo("Europe/Moscow")
 import random
 import asyncio
 import json
@@ -18,13 +21,17 @@ from Database import (
 
 CHOOSING_REMINDER = 4
 CHOOSING_GIFT_NUMBER = 5
+CHOOSING_TIME = 6
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def call_api(endpoint, data, timeout=10):
+def call_api(endpoint, data, timeout=10, method='POST'):
     try:
-        response = requests.post(f'{API_BASE_URL}/{endpoint}', json=data, timeout=timeout)
+        if method == 'GET':
+            response = requests.get(f'{API_BASE_URL}/{endpoint}', timeout=timeout)
+        else:
+            response = requests.post(f'{API_BASE_URL}/{endpoint}', json=data, timeout=timeout)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.ConnectionError:
@@ -41,18 +48,33 @@ def check_api_available():
     except:
         return False
 
+
+def get_or_create_user_api(update):
+    user = update.effective_user
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    return call_api('get_or_create_user', {
+        'username': user.username or user.first_name,
+        'chat_id': chat_id,
+    })
+
+
 def create_calendar(year, month):
     keyboard = []
     keyboard.append([InlineKeyboardButton(f"📅 {MONTHS_RU[month-1]} {year}", callback_data="ignore")])
     week_days = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
     keyboard.append([InlineKeyboardButton(d, callback_data="ignore") for d in week_days])
+    today = datetime.now(TZ).date()
     for week in calendar.monthcalendar(year, month):
         row = []
         for day in week:
             if day == 0:
                 row.append(InlineKeyboardButton(" ", callback_data="ignore"))
             else:
-                row.append(InlineKeyboardButton(str(day), callback_data=f"date_{year}_{month}_{day}"))
+                cell_date = date(year, month, day)
+                if cell_date < today:
+                    row.append(InlineKeyboardButton("·", callback_data="past_date"))
+                else:
+                    row.append(InlineKeyboardButton(str(day), callback_data=f"date_{year}_{month}_{day}"))
         keyboard.append(row)
     prev_year = year - 1 if month == 1 else year
     prev_month = 12 if month == 1 else month - 1
@@ -96,12 +118,92 @@ def get_gift_suggestions(preferences):
         logger.error(f"Ошибка Yandex AI: {e}")
         return "Произошла ошибка. Попробуйте позже."
 
+
+# ===== Планировщик напоминаний =====
+async def reminder_job_callback(context: ContextTypes.DEFAULT_TYPE):
+    job_data = context.job.data or {}
+    chat_id = job_data.get('chat_id')
+    text = job_data.get('reminder')
+    user_id = job_data.get('user_id')
+    record_id = job_data.get('record_id')
+    if chat_id and text:
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"🔔 Напоминание!\n\n📌 {text}"
+            )
+        except Exception as e:
+            logger.error(f"Не удалось отправить напоминание: {e}")
+    if user_id and record_id:
+        call_api('mark_reminder_notified', {'user_id': user_id, 'record_id': record_id})
+
+
+def schedule_reminder(application, *, user_id, chat_id, record_id, year, month, day, time_str, reminder_text):
+    try:
+        hour, minute = [int(x) for x in time_str.split(':')]
+        target_dt = datetime(year, month, day, hour, minute, tzinfo=TZ)
+    except Exception as e:
+        logger.error(f"Не удалось распарсить дату/время напоминания: {e}")
+        return False
+
+    now = datetime.now(TZ)
+    if target_dt <= now:
+        delta = (now - target_dt).total_seconds()
+        if delta <= 3600:
+            logger.info(f"Время напоминания {target_dt} только что прошло ({int(delta)} сек) — отправлю сейчас.")
+            target_dt = now
+        else:
+            logger.info(f"Время напоминания {target_dt} давно прошло — пропускаю и помечаю как отправленное.")
+            call_api('mark_reminder_notified', {'user_id': user_id, 'record_id': record_id})
+            return False
+
+    if application.job_queue is None:
+        logger.error("JobQueue недоступна — установите python-telegram-bot[job-queue] или apscheduler.")
+        return False
+
+    application.job_queue.run_once(
+        reminder_job_callback,
+        when=target_dt,
+        data={
+            'chat_id': chat_id,
+            'reminder': reminder_text,
+            'user_id': user_id,
+            'record_id': record_id,
+        },
+        name=f"reminder_{user_id}_{record_id}"
+    )
+    logger.info(f"Запланировано напоминание для user_id={user_id}, record_id={record_id} на {target_dt}")
+    return True
+
+
+def load_pending_reminders(application):
+    result = call_api('get_pending_reminders', None, method='GET')
+    if not result:
+        return
+    reminders = result.get('reminders', [])
+    for r in reminders:
+        schedule_reminder(
+            application,
+            user_id=r['user_id'],
+            chat_id=r['chat_id'],
+            record_id=r['record_id'],
+            year=r['year'],
+            month=r['month'],
+            day=r['day'],
+            time_str=r['time'],
+            reminder_text=r['reminder'],
+        )
+    logger.info(f"Загружено {len(reminders)} ожидающих напоминаний")
+
+
+# ===== Команды бота =====
 async def start_command(update, context):
     user = update.effective_user
     if not check_api_available():
         await update.message.reply_text("⚠️ Сервер временно недоступен. Пожалуйста, попробуйте позже.")
         return
-    result = call_api('get_or_create_user', {'username': user.username or user.first_name})
+
+    result = get_or_create_user_api(update)
     if result and result.get('user_id'):
         context.user_data['db_user_id'] = result['user_id']
     keyboard = [[InlineKeyboardButton("📅 Выбрать дату", callback_data='show_calendar')]]
@@ -122,11 +224,11 @@ async def choose_date_command(update, context):
     await update.message.reply_text("📆 Выберите дату:", reply_markup=create_calendar(now.year, now.month))
 
 async def my_dates_command(update, context):
-    user = update.effective_user
     if not check_api_available():
         await update.message.reply_text("⚠️ Сервер временно недоступен. Пожалуйста, попробуйте позже.")
         return
-    result = call_api('get_or_create_user', {'username': user.username or user.first_name})
+
+    result = get_or_create_user_api(update)
     if result and result.get('user_id'):
         dates_result = call_api('get_user_dates', {'user_id': result['user_id'], 'limit': 10})
         if dates_result and dates_result.get('dates'):
@@ -160,7 +262,7 @@ async def gift_choice_callback(update, context):
 
 async def receive_preferences(update, context):
     preferences = update.message.text
-    result = call_api('get_or_create_user', {'username': update.effective_user.username or update.effective_user.first_name})
+    result = get_or_create_user_api(update)
     user_id = result.get('user_id') if result else None
     record_id = context.user_data.get('last_record_id')
     if user_id and record_id:
@@ -185,7 +287,7 @@ async def select_gift_callback(update, context):
     gift_number = int(query.data.split("_")[2])
     gifts = context.user_data.get('current_gifts', [])
     record_id = context.user_data.get('current_record_id')
-    result = call_api('get_or_create_user', {'username': update.effective_user.username or update.effective_user.first_name})
+    result = get_or_create_user_api(update)
     user_id = result.get('user_id') if result else None
     selected = next((g['text'] for g in gifts if g['number'] == gift_number), None)
     if selected and record_id and user_id:
@@ -197,7 +299,6 @@ async def gift_action_callback(update, context):
     query = update.callback_query
     await query.answer()
     data = query.data
-    record_id = context.user_data.get('current_record_id')
     if data.startswith("find_more_"):
         rid = int(data.split("_")[2])
         preferences = context.user_data.get('current_preferences', '')
@@ -225,7 +326,7 @@ async def gift_action_callback(update, context):
 
 async def receive_new_preferences(update, context):
     new_prefs = update.message.text
-    result = call_api('get_or_create_user', {'username': update.effective_user.username or update.effective_user.first_name})
+    result = get_or_create_user_api(update)
     user_id = result.get('user_id') if result else None
     record_id = context.user_data.get('changing_prefs_record')
     if user_id and record_id:
@@ -251,7 +352,7 @@ async def reminder_callback(update, context):
         await query.edit_message_text("📝 Напишите текст напоминания:")
         return CHOOSING_REMINDER
     elif query.data == "no_reminder":
-        result = call_api('get_or_create_user', {'username': update.effective_user.username or update.effective_user.first_name})
+        result = get_or_create_user_api(update)
         user_id = result.get('user_id') if result else None
         if user_id:
             y, m, d = context.user_data.get('selected_year'), context.user_data.get('selected_month'), context.user_data.get('selected_day')
@@ -276,14 +377,64 @@ async def receive_reminder(update, context):
     if not reminder_text:
         await update.message.reply_text("Напишите текст напоминания:")
         return CHOOSING_REMINDER
-    result = call_api('get_or_create_user', {'username': update.effective_user.username or update.effective_user.first_name})
+    context.user_data['pending_reminder_text'] = reminder_text
+    await update.message.reply_text(
+        "🕒 Во сколько прислать напоминание?\n\n"
+        "Введите время в формате ЧЧ:ММ (например, 09:30 или 18:00):"
+    )
+    return CHOOSING_TIME
+
+
+async def receive_time(update, context):
+    time_text = update.message.text.strip()
+    match = re.match(r'^(\d{1,2}):(\d{2})$', time_text)
+    if not match:
+        await update.message.reply_text("⚠️ Неверный формат. Введите время как ЧЧ:ММ (например, 09:30):")
+        return CHOOSING_TIME
+    hour, minute = int(match.group(1)), int(match.group(2))
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        await update.message.reply_text("⚠️ Время должно быть от 00:00 до 23:59. Введите ещё раз:")
+        return CHOOSING_TIME
+
+    y = context.user_data.get('selected_year')
+    m = context.user_data.get('selected_month')
+    d = context.user_data.get('selected_day')
+    reminder_text = context.user_data.get('pending_reminder_text', '')
+
+    try:
+        target_dt = datetime(y, m, d, hour, minute, tzinfo=TZ)
+    except Exception:
+        await update.message.reply_text("⚠️ Не удалось обработать дату/время. Попробуйте ещё раз:")
+        return CHOOSING_TIME
+
+    if target_dt <= datetime.now(TZ):
+        await update.message.reply_text(
+            "⚠️ Это время уже прошло. Введите время в будущем (ЧЧ:ММ):"
+        )
+        return CHOOSING_TIME
+
+    time_str = f"{hour:02d}:{minute:02d}"
+
+    result = get_or_create_user_api(update)
     user_id = result.get('user_id') if result else None
+    chat_id = update.effective_chat.id
+
     if user_id:
-        y, m, d = context.user_data.get('selected_year'), context.user_data.get('selected_month'), context.user_data.get('selected_day')
-        save_result = call_api('save_user_date', {'user_id': user_id, 'year': y, 'month': m, 'day': d, 'holiday_reminder': reminder_text})
+        save_result = call_api('save_user_date', {
+            'user_id': user_id, 'year': y, 'month': m, 'day': d,
+            'holiday_reminder': reminder_text, 'time': time_str
+        })
         if save_result and save_result.get('record_id'):
             record_id = save_result['record_id']
             context.user_data['last_record_id'] = record_id
+
+            schedule_reminder(
+                context.application,
+                user_id=user_id, chat_id=chat_id, record_id=record_id,
+                year=y, month=m, day=d, time_str=time_str,
+                reminder_text=reminder_text,
+            )
+
             count_result = call_api('get_user_dates', {'user_id': user_id})
             total = count_result.get('count', 0) if count_result else 0
             keyboard = [
@@ -291,16 +442,22 @@ async def receive_reminder(update, context):
                 [InlineKeyboardButton("❌ Нет, просто сохранить дату", callback_data="no_gift_help")]
             ]
             await update.message.reply_text(
-                f"✅ Дата {d}.{m}.{y}\n📌 Напоминание: {reminder_text}\n\n📊 Всего дат: {total}\n\nПомочь с подарком?",
+                f"✅ Дата {d}.{m}.{y} в {time_str}\n📌 Напоминание: {reminder_text}\n"
+                f"🔔 Я пришлю уведомление в указанное время.\n\n"
+                f"📊 Всего дат: {total}\n\nПомочь с подарком?",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
     return ConversationHandler.END
+
 
 async def button_callback(update, context):
     query = update.callback_query
     await query.answer()
     data = query.data
     if data == "ignore":
+        return
+    elif data == "past_date":
+        await query.answer("⛔ Эта дата уже прошла. Выберите будущую.", show_alert=True)
         return
     elif data in ("show_calendar", "today"):
         now = datetime.now()
@@ -310,13 +467,17 @@ async def button_callback(update, context):
         await query.edit_message_text("📆 Выберите дату:", reply_markup=create_calendar(int(year), int(month)))
     elif data.startswith("date_"):
         _, year, month, day = data.split("_")
-        context.user_data.update({'selected_year': int(year), 'selected_month': int(month), 'selected_day': int(day)})
+        y, m, d = int(year), int(month), int(day)
+        if date(y, m, d) < datetime.now(TZ).date():
+            await query.edit_message_text("⛔ Эта дата уже прошла. Выберите будущую дату.")
+            return
+        context.user_data.update({'selected_year': y, 'selected_month': m, 'selected_day': d})
         keyboard = [
             [InlineKeyboardButton("✅ Да, добавить напоминание", callback_data="add_reminder")],
             [InlineKeyboardButton("❌ Нет, не нужно", callback_data="no_reminder")]
         ]
         await query.edit_message_text(
-            f"📅 Вы выбрали: {day}.{month}.{year}\n\nДобавить напоминание?",
+            f"📅 Вы выбрали: {d}.{m}.{y}\n\nДобавить напоминание?",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     elif data == "close":
@@ -330,11 +491,10 @@ async def handle_message(update, context):
     )
 
 async def delete_date_command(update, context):
-    user = update.effective_user
     if not check_api_available():
         await update.message.reply_text("⚠️ Сервер временно недоступен. Попробуйте позже.")
         return
-    result = call_api('get_or_create_user', {'username': user.username or user.first_name})
+    result = get_or_create_user_api(update)
     if not result or not result.get('user_id'):
         await update.message.reply_text("❌ Не удалось получить данные пользователя.")
         return
@@ -356,11 +516,10 @@ async def delete_date_command(update, context):
 
 
 async def delete_all_dates_command(update, context):
-    user = update.effective_user
     if not check_api_available():
         await update.message.reply_text("⚠️ Сервер временно недоступен. Попробуйте позже.")
         return
-    result = call_api('get_or_create_user', {'username': user.username or user.first_name})
+    result = get_or_create_user_api(update)
     if not result or not result.get('user_id'):
         await update.message.reply_text("❌ Не удалось получить данные пользователя.")
         return
@@ -384,13 +543,12 @@ async def delete_callbacks(update, context):
     query = update.callback_query
     await query.answer()
     data = query.data
-    user = update.effective_user
 
     if data == "cancel_delete":
         await query.edit_message_text("❌ Удаление отменено.")
         return
 
-    result = call_api('get_or_create_user', {'username': user.username or user.first_name})
+    result = get_or_create_user_api(update)
     if not result or not result.get('user_id'):
         await query.edit_message_text("❌ Не удалось получить данные пользователя.")
         return
@@ -400,6 +558,12 @@ async def delete_callbacks(update, context):
         record_id = int(data.split("confirm_delete_date_")[1])
         del_result = call_api('delete_date', {'user_id': user_id, 'record_id': record_id})
         if del_result and del_result.get('success'):
+            try:
+                jobs = context.application.job_queue.get_jobs_by_name(f"reminder_{user_id}_{record_id}")
+                for j in jobs:
+                    j.schedule_removal()
+            except Exception:
+                pass
             await query.edit_message_text("✅ Дата успешно удалена.")
         else:
             await query.edit_message_text("❌ Не удалось удалить дату. Попробуйте ещё раз.")
@@ -407,6 +571,12 @@ async def delete_callbacks(update, context):
     elif data == "confirm_delete_all":
         del_result = call_api('delete_all_dates', {'user_id': user_id})
         if del_result is not None:
+            try:
+                for j in list(context.application.job_queue.jobs()):
+                    if j.name and j.name.startswith(f"reminder_{user_id}_"):
+                        j.schedule_removal()
+            except Exception:
+                pass
             deleted = del_result.get('deleted', 0)
             await query.edit_message_text(f"✅ Удалено {deleted} дат(ы).")
         else:
@@ -415,6 +585,11 @@ async def delete_callbacks(update, context):
 
 async def error_handler(update, context):
     logger.error(f"Ошибка: {context.error}")
+
+
+async def post_init(application):
+    load_pending_reminders(application)
+
 
 def main():
     print("=" * 50)
@@ -425,7 +600,8 @@ def main():
         print(f"⚠️ Убедитесь, что Flask сервер запущен на {API_BASE_URL}")
         print("⚠️ Запустите flask_api.py в отдельном терминале")
 
-    app = Application.builder().token(TOKEN).build()
+    defaults = Defaults(tzinfo=TZ)
+    app = Application.builder().token(TOKEN).defaults(defaults).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("hello", hello_command))
@@ -443,7 +619,10 @@ def main():
     )
     reminder_conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(reminder_callback, pattern="^(add_reminder|no_reminder)$")],
-        states={CHOOSING_REMINDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_reminder)]},
+        states={
+            CHOOSING_REMINDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_reminder)],
+            CHOOSING_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_time)],
+        },
         fallbacks=[CommandHandler("cancel", lambda u,c: u.message.reply_text("Отменено"))],
     )
     change_prefs_handler = ConversationHandler(
